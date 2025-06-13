@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Calorie Tracker</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .card {
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+        .card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.15);
+        }
+        #preview {
+            max-width: 100%;
+            max-height: 300px;
+            object-fit: cover;
+            display: none;
+        }
+        #video {
+            max-width: 100%;
+            max-height: 300px;
+            display: none;
+        }
+        #loading {
+            display: none;
+            text-align: center;
+            color: #4B5563;
+        }
+        .progress-ring {
+            position: relative;
+            width: 80px;
+            height: 80px;
+            margin: 0 auto;
+        }
+        .progress-ring__circle {
+            transform: rotate(-90deg);
+            transform-origin: 50% 50%;
+        }
+        .progress-ring__circle--track {
+            stroke: #E5E7EB;
+        }
+        .progress-ring__circle--fill {
+            stroke: #3B82F6;
+            transition: stroke-dashoffset 0.5s ease;
+        }
+        .progress-ring__text {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 16px;
+            font-weight: bold;
+            color: #1F2937;
+        }
+        .nutrition-progress {
+            height: 8px;
+            border-radius: 4px;
+            background-color: #E5E7EB;
+            overflow: hidden;
+            margin-top: 4px;
+        }
+        .nutrition-progress-fill {
+            height: 100%;
+            border-radius: 4px;
+            transition: width 0.5s ease;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen flex flex-col items-center justify-center p-4">
+    <div class="w-full max-w-4xl bg-white rounded-lg shadow-lg p-6">
+        <h1 class="text-3xl font-bold text-center text-gray-800 mb-6">Calorie Tracker</h1>
+        
+        <!-- Image Upload/Capture Section -->
+        <div class="mb-6">
+            <div class="flex justify-center gap-4 mb-4">
+                <label class="bg-blue-500 text-white px-4 py-2 rounded-lg cursor-pointer hover:bg-blue-600 transition">
+                    Upload Image
+                    <input type="file" id="imageInput" accept="image/*" class="hidden">
+                </label>
+                <button id="captureBtn" class="bg-green-500 text-white px-4 py-2 rounded-lg hover:bg-green-600 transition">Take Picture</button>
+            </div>
+            <video id="video" class="mx-auto rounded-lg" autoplay></video>
+            <canvas id="canvas" class="hidden"></canvas>
+            <img id="preview" class="mx-auto rounded-lg" alt="Uploaded or captured food image">
+            <div id="loading" class="flex flex-col items-center py-4">
+                <div class="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-2"></div>
+                <p>Analyzing your food...</p>
+            </div>
+            <button id="submitBtn" class="mt-4 bg-purple-500 text-white px-4 py-2 rounded-lg hover:bg-purple-600 transition w-full max-w-xs mx-auto hidden">Analyze Food</button>
+        </div>
+
+        <!-- Calorie Results Section -->
+        <div id="results" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"></div>
+    </div>
+
+    <script>
+        const imageInput = document.getElementById('imageInput');
+        const captureBtn = document.getElementById('captureBtn');
+        const submitBtn = document.getElementById('submitBtn');
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const preview = document.getElementById('preview');
+        const results = document.getElementById('results');
+        const loading = document.getElementById('loading');
+        let stream = null;
+
+        // Handle image upload
+        imageInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                if (!file.type.startsWith('image/')) {
+                    alert('Please upload a valid image file.');
+                    return;
+                }
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    preview.src = e.target.result;
+                    preview.style.display = 'block';
+                    video.style.display = 'none';
+                    submitBtn.style.display = 'block';
+                    if (stream) {
+                        stream.getTracks().forEach(track => track.stop());
+                        stream = null;
+                        captureBtn.textContent = 'Take Picture';
+                    }
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+
+        // Handle camera capture
+        captureBtn.addEventListener('click', async () => {
+            if (!stream) {
+                try {
+                    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+                    video.srcObject = stream;
+                    video.style.display = 'block';
+                    preview.style.display = 'none';
+                    submitBtn.style.display = 'block';
+                    captureBtn.textContent = 'Capture Photo';
+                } catch (err) {
+                    console.error('Error accessing camera:', err);
+                    alert('Unable to access camera. Please allow camera access or upload an image.');
+                }
+            } else {
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                canvas.getContext('2d').drawImage(video, 0, 0);
+                preview.src = canvas.toDataURL('image/jpeg');
+                preview.style.display = 'block';
+                video.style.display = 'none';
+                submitBtn.style.display = 'block';
+                stream.getTracks().forEach(track => track.stop());
+                stream = null;
+                captureBtn.textContent = 'Take Picture';
+            }
+        });
+
+        // Upload image to ImgBB and get nutritional data from Grok
+        async function fetchCalorieData(imageData) {
+            try {
+                // Step 1: Upload image to ImgBB
+                const formData = new FormData();
+                // Convert base64 to blob for upload
+                const base64String = imageData.split(',')[1];
+                const byteCharacters = atob(base64String);
+                const byteNumbers = new Array(byteCharacters.length);
+                for (let i = 0; i < byteCharacters.length; i++) {
+                    byteNumbers[i] = byteCharacters.charCodeAt(i);
+                }
+                const byteArray = new Uint8Array(byteNumbers);
+                const blob = new Blob([byteArray], { type: 'image/jpeg' });
+                formData.append('image', blob, 'food_image.jpg');
+
+                const imgbbResponse = await fetch('https://api.imgbb.com/1/upload?key=YOUR_KEY', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!imgbbResponse.ok) {
+                    throw new Error(`ImgBB API error: ${imgbbResponse.statusText}`);
+                }
+
+                const imgbbData = await imgbbResponse.json();
+                if (!imgbbData.data || !imgbbData.data.url) {
+                    throw new Error('No image URL returned from ImgBB');
+                }
+                const imageUrl = imgbbData.data.url;
+
+                // Step 2: Call Grok API with the image URL
+                const grokResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ____'
+                    },
+                    body: JSON.stringify({
+                        messages: [
+                            {
+                                role: 'user',
+                                content: [
+                                    {
+                                        type: 'text',
+                                        text: 'Extract calorie details of each item in this image in the following JSON format only: {"items":[{"item_name":"name of item","total_calories":"in kcal","total_protein":"in gm","total_carbs":"in gm","total_fats":"in gm"},...]}'
+                                    },
+                                    {
+                                        type: 'image_url',
+                                        image_url: { url: imageUrl }
+                                    }
+                                ]
+                            }
+                        ],
+                        model: 'meta-llama/llama-4-maverick-17b-128e-instruct',
+                        temperature: 0.5,
+                        max_completion_tokens: 1024,
+                        top_p: 1,
+                        stream: false,
+                        response_format: { type: 'json_object' },
+                        stop: null
+                    })
+                });
+
+                if (!grokResponse.ok) {
+                    throw new Error(`Grok API error: ${grokResponse.statusText}`);
+                }
+
+                const grokData = await grokResponse.json();
+                const nutritionalData = JSON.parse(grokData.choices[0].message.content);
+                return nutritionalData.items;
+            } catch (err) {
+                console.error('Error in fetchCalorieData:', err);
+                throw err;
+            }
+        }
+
+        // Create circular progress indicator
+        function createProgressRing(value, maxValue = 1000) {
+            const percentage = Math.min(Math.round((value / maxValue) * 100), 100);
+            const radius = 35;
+            const circumference = 2 * Math.PI * radius;
+            const offset = circumference - (percentage / 100) * circumference;
+            
+            return `
+                <div class="progress-ring">
+                    <svg class="progress-ring__circle" width="80" height="80" viewBox="0 0 80 80">
+                        <circle class="progress-ring__circle--track" stroke-width="6" fill="transparent" r="${radius}" cx="40" cy="40"/>
+                        <circle class="progress-ring__circle--fill" stroke-width="6" fill="transparent" r="${radius}" cx="40" cy="40" stroke-dasharray="${circumference}" stroke-dashoffset="${offset}"/>
+                    </svg>
+                    <div class="progress-ring__text">${percentage}%</div>
+                </div>
+            `;
+        }
+
+        // Create nutrition progress bar
+        function createNutritionProgress(value, maxValue = 100, color = 'bg-blue-500') {
+            const percentage = Math.min(Math.round((value / maxValue) * 100), 100);
+            return `
+                <div class="nutrition-progress">
+                    <div class="${color} nutrition-progress-fill" style="width: ${percentage}%"></div>
+                </div>
+            `;
+        }
+
+        // Handle analyze button click
+        submitBtn.addEventListener('click', async () => {
+            if (preview.src) {
+                submitBtn.disabled = true;
+                submitBtn.textContent = 'Analyzing...';
+                loading.style.display = 'flex';
+                results.innerHTML = ''; // Clear previous results
+                
+                try {
+                    const items = await fetchCalorieData(preview.src);
+                    
+                    items.forEach(data => {
+                        // Extract numeric values from the strings
+                        const calories = parseInt(data.total_calories) || 0;
+                        const protein = parseInt(data.total_protein) || 0;
+                        const carbs = parseInt(data.total_carbs) || 0;
+                        const fats = parseInt(data.total_fats) || 0;
+                        
+                        const card = document.createElement('div');
+                        card.className = 'card bg-gray-50 p-4 rounded-lg shadow-md';
+                        card.innerHTML = `
+                            <h2 class="text-xl font-semibold text-gray-800 mb-2 text-center">${data.item_name}</h2>
+                            <div class="mb-4">
+                                ${createProgressRing(calories, 1000)}
+                                <p class="text-center mt-2 text-gray-600">${calories} kcal</p>
+                            </div>
+                            <div class="space-y-2">
+                                <div>
+                                    <p class="text-gray-600 flex justify-between">
+                                        <span>Protein</span>
+                                        <span class="font-bold">${protein}g</span>
+                                    </p>
+                                    ${createNutritionProgress(protein, 50, 'bg-green-500')}
+                                </div>
+                                <div>
+                                    <p class="text-gray-600 flex justify-between">
+                                        <span>Carbs</span>
+                                        <span class="font-bold">${carbs}g</span>
+                                    </p>
+                                    ${createNutritionProgress(carbs, 100, 'bg-yellow-500')}
+                                </div>
+                                <div>
+                                    <p class="text-gray-600 flex justify-between">
+                                        <span>Fat</span>
+                                        <span class="font-bold">${fats}g</span>
+                                    </p>
+                                    ${createNutritionProgress(fats, 50, 'bg-red-500')}
+                                </div>
+                            </div>
+                        `;
+                        results.appendChild(card);
+                    });
+                    
+                    preview.style.display = 'none';
+                    submitBtn.style.display = 'none';
+                } catch (err) {
+                    alert('Failed to analyze food. Please try again.');
+                }
+                
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Analyze Food';
+                loading.style.display = 'none';
+            }
+        });
+
+        // Cleanup camera on page unload
+        window.addEventListener('unload', () => {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+            }
+        });
+    </script>
+</body>
+</html>
